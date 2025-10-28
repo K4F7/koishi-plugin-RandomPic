@@ -206,9 +206,16 @@ export function apply(ctx: Context, config: Config) {
 
     const declaration = ctx.command(`${name} [count:number]`, helpParts.join('\n'))
 
-    declaration.action(async ({ session }, countArg) => {
-      const requested = Number.parseInt(countArg, 10)
-      const count = Number.isFinite(requested) && requested > 0 ? requested : config.defaultCount
+    declaration.action(async ({ session }, countArg?: number) => {
+      if (!session) {
+        logger.warn('会话不可用，无法处理命令 %s', name)
+        return
+      }
+
+      const count =
+        typeof countArg === 'number' && Number.isFinite(countArg) && countArg > 0
+          ? countArg
+          : config.defaultCount
       const capped = Math.min(count, limit)
 
       let state = commandStates.get(name)
