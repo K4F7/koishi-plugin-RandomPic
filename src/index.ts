@@ -1,8 +1,8 @@
-import { Context, Schema, Logger, segment } from 'koishi'
-import { promises as fsp } from 'fs'
-import fs from 'fs'
-import path from 'path'
-import { randomInt } from 'crypto'
+import { Context, Logger, Schema, segment } from 'koishi'
+import { FSWatcher, watch } from 'node:fs'
+import { mkdir, readdir } from 'node:fs/promises'
+import path from 'node:path'
+import { randomInt } from 'node:crypto'
 
 const logger = new Logger('random-pic')
 
@@ -16,7 +16,7 @@ const IMAGE_EXTENSIONS = new Set([
   '.avif',
 ])
 
-interface CommandConfig {
+export interface CommandConfig {
   paths: string[]
   limit?: number
   recursive?: boolean
@@ -33,7 +33,7 @@ export interface Config {
 
 interface CommandState {
   files: string[]
-  watchers: fs.FSWatcher[]
+  watchers: FSWatcher[]
 }
 
 export const Config: Schema<Config> = Schema.object({
@@ -48,90 +48,118 @@ export const Config: Schema<Config> = Schema.object({
       recursive: Schema.boolean().default(true).description('是否递归扫描目录'),
       description: Schema.string().default('').description('命令的额外说明'),
     }),
-  ).description('命令与图库的映射').default({}),
+  )
+    .description('命令与图库的映射')
+    .default({}),
 })
+
+function resolveGalleryPath(root: string, location: string) {
+  return path.isAbsolute(location) ? location : path.resolve(root, location)
+}
 
 async function ensureDirectory(dir: string) {
   try {
-    await fsp.mkdir(dir, { recursive: true })
+    await mkdir(dir, { recursive: true })
   } catch (error) {
     logger.warn(error, '无法创建目录 %s', dir)
     throw error
   }
 }
 
-async function collectImages(dir: string, recursive: boolean, seen = new Set<string>()): Promise<string[]> {
-  const items: string[] = []
+async function collectImages(dir: string, recursive: boolean): Promise<string[]> {
+  const files: string[] = []
   try {
-    const entries = await fsp.readdir(dir, { withFileTypes: true })
+    const entries = await readdir(dir, { withFileTypes: true })
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
-        if (recursive && !seen.has(full)) {
-          seen.add(full)
-          items.push(...await collectImages(full, recursive, seen))
+        if (recursive) {
+          files.push(...await collectImages(full, recursive))
         }
         continue
       }
       if (!entry.isFile()) continue
       const ext = path.extname(entry.name).toLowerCase()
       if (IMAGE_EXTENSIONS.has(ext)) {
-        items.push(full)
+        files.push(full)
       }
     }
   } catch (error) {
     logger.warn(error, '读取目录 %s 失败', dir)
   }
-  return items
+  return files
 }
 
 async function buildCommandCache(config: CommandConfig, root: string): Promise<string[]> {
   const fileSet = new Set<string>()
-  for (const relative of config.paths) {
-    const resolved = path.isAbsolute(relative) ? relative : path.resolve(root, relative)
+  for (const location of config.paths) {
+    const resolved = resolveGalleryPath(root, location)
     await ensureDirectory(resolved)
-    const files = await collectImages(resolved, config.recursive ?? true)
-    for (const file of files) {
-      fileSet.add(file)
+    const images = await collectImages(resolved, config.recursive ?? true)
+    for (const image of images) {
+      fileSet.add(image)
     }
   }
   return [...fileSet]
 }
 
-function pickRandom<T>(source: T[], count: number): T[] {
-  if (count >= source.length) return [...source]
-  const picked: T[] = []
+function pickRandom<T>(items: readonly T[], count: number) {
+  if (items.length <= count) return [...items]
+  const chosen: T[] = []
   const used = new Set<number>()
-  while (picked.length < count && used.size < source.length) {
-    const index = randomInt(source.length)
+  while (chosen.length < count && used.size < items.length) {
+    const index = randomInt(items.length)
     if (used.has(index)) continue
     used.add(index)
-    picked.push(source[index])
+    chosen.push(items[index]!)
   }
-  return picked
-}
-
-async function registerWatchers(config: CommandConfig, root: string, refresh: () => void) {
-  const watchers: fs.FSWatcher[] = []
-  const watchDirs = config.paths.map((relative) => path.isAbsolute(relative) ? relative : path.resolve(root, relative))
-  for (const dir of watchDirs) {
-    try {
-      await ensureDirectory(dir)
-      const watcher = fs.watch(dir, { persistent: false }, debounce(refresh, 200))
-      watcher.on('error', (error) => logger.warn(error, '监听目录 %s 失败', dir))
-      watchers.push(watcher)
-    } catch (error) {
-      logger.warn(error, '无法监听目录 %s', dir)
-    }
-  }
-  return watchers
+  return chosen
 }
 
 function debounce(fn: () => void, delay: number) {
-  let timer: NodeJS.Timeout
+  let timer: NodeJS.Timeout | null = null
   return () => {
-    clearTimeout(timer)
-    timer = setTimeout(fn, delay)
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      fn()
+    }, delay)
+  }
+}
+
+async function registerWatchers(
+  name: string,
+  config: CommandConfig,
+  root: string,
+  onRefresh: () => Promise<void>,
+): Promise<FSWatcher[]> {
+  const watchers: FSWatcher[] = []
+  const trigger = debounce(() => {
+    onRefresh().catch((error) => logger.warn(error, '刷新命令 %s 的缓存失败', name))
+  }, 200)
+
+  for (const location of config.paths) {
+    const resolved = resolveGalleryPath(root, location)
+    try {
+      await ensureDirectory(resolved)
+      const watcher = watch(resolved, { persistent: false }, trigger)
+      watcher.on('error', (error) => logger.warn(error, '监听目录 %s 失败', resolved))
+      watchers.push(watcher)
+    } catch (error) {
+      logger.warn(error, '初始化目录 %s 的监听失败', resolved)
+    }
+  }
+
+  return watchers
+}
+
+function disposeWatchers(watchers: Iterable<FSWatcher>) {
+  for (const watcher of watchers) {
+    try {
+      watcher.close()
+    } catch (error) {
+      logger.warn(error, '关闭目录监听失败')
+    }
   }
 }
 
@@ -139,23 +167,7 @@ export function apply(ctx: Context, config: Config) {
   const rootDir = path.isAbsolute(config.root) ? config.root : path.resolve(ctx.baseDir, config.root)
   const commandStates = new Map<string, CommandState>()
 
-  ensureDirectory(rootDir).catch((error) => logger.warn(error, '初始化图库目录失败'))
-
-  ctx.on('ready', async () => {
-    await ensureDirectory(rootDir)
-    await refreshAll()
-  })
-
-  ctx.on('dispose', () => {
-    for (const state of commandStates.values()) {
-      for (const watcher of state.watchers) {
-        watcher.close()
-      }
-    }
-    commandStates.clear()
-  })
-
-  async function refreshCommand(name: string, commandConfig: CommandConfig) {
+  const refreshCommand = async (name: string, commandConfig: CommandConfig) => {
     const files = await buildCommandCache(commandConfig, rootDir)
     const state = commandStates.get(name)
     if (state) {
@@ -165,41 +177,55 @@ export function apply(ctx: Context, config: Config) {
     }
   }
 
-  async function refreshAll() {
+  const refreshAll = async () => {
     await ensureDirectory(rootDir)
-    for (const [name, commandConfig] of Object.entries(config.commands)) {
-      await refreshCommand(name, commandConfig)
-    }
+    await Promise.all(
+      Object.entries(config.commands).map(([name, commandConfig]) => refreshCommand(name, commandConfig)),
+    )
   }
 
-  for (const [name, commandConfig] of Object.entries(config.commands)) {
-    const helpParts: string[] = []
-    if (commandConfig.description) {
-      helpParts.push(commandConfig.description)
-    }
-    helpParts.push(`图库来源：${commandConfig.paths.join(', ')}`)
-    const limit = commandConfig.limit ?? config.maxCount
-    helpParts.push(`一次最多发送 ${limit} 张图片`)
-    const decl = ctx.command(`${name} [count:number]`, helpParts.join('\n'))
-    decl.action(async ({ session }, countArg) => {
-      const requestCount = Number.parseInt(countArg, 10)
-      const defaultCount = config.defaultCount
-      const maxCount = commandConfig.limit ?? config.maxCount
-      const count = Number.isFinite(requestCount) && requestCount > 0 ? requestCount : defaultCount
-      const capped = Math.min(count, maxCount)
+  ctx.on('ready', async () => {
+    await ensureDirectory(rootDir)
+    await refreshAll()
+  })
 
-      const state = commandStates.get(name)
+  ctx.on('dispose', () => {
+    for (const state of commandStates.values()) {
+      disposeWatchers(state.watchers)
+    }
+    commandStates.clear()
+  })
+
+  for (const [name, commandConfig] of Object.entries(config.commands)) {
+    const limit = commandConfig.limit ?? config.maxCount
+    const helpParts = [
+      commandConfig.description ?? '',
+      `图库来源：${commandConfig.paths.join(', ')}`,
+      `一次最多发送 ${limit} 张图片`,
+    ].filter(Boolean)
+
+    const declaration = ctx.command(`${name} [count:number]`, helpParts.join('\n'))
+
+    declaration.action(async ({ session }, countArg) => {
+      const requested = Number.parseInt(countArg, 10)
+      const count = Number.isFinite(requested) && requested > 0 ? requested : config.defaultCount
+      const capped = Math.min(count, limit)
+
+      let state = commandStates.get(name)
       if (!state || !state.files.length) {
         await refreshCommand(name, commandConfig)
+        state = commandStates.get(name)
       }
-      const files = commandStates.get(name)?.files ?? []
+
+      const files = state?.files ?? []
       if (!files.length) {
-        await session.send(`图库为空或无法读取，请稍后再试。`)
+        await session.send('图库为空或无法读取，请稍后再试。')
         return
       }
 
-      const picked = pickRandom(files, Math.min(capped, files.length))
-      const messages = picked.map((file) => segment.image('file://' + file))
+      const selected = pickRandom(files, Math.min(capped, files.length))
+      const messages = selected.map((file) => segment.image('file://' + file))
+
       try {
         if (config.useQueue) {
           for (const message of messages) {
@@ -217,18 +243,15 @@ export function apply(ctx: Context, config: Config) {
     })
 
     const state = commandStates.get(name) ?? { files: [], watchers: [] }
-    const refresh = async () => {
-      logger.debug('刷新命令 %s 的缓存', name)
-      await refreshCommand(name, commandConfig)
-    }
     commandStates.set(name, state)
-    registerWatchers(commandConfig, rootDir, () => {
-      refresh().catch((error) => logger.warn(error, '刷新缓存失败'))
-    }).then((watchers) => {
-      state.watchers = watchers
-    }).catch((error) => {
-      logger.warn(error, '初始化命令 %s 的目录监听失败', name)
-    })
+
+    registerWatchers(name, commandConfig, rootDir, () => refreshCommand(name, commandConfig))
+      .then((watchers) => {
+        disposeWatchers(state.watchers)
+        state.watchers = watchers
+      })
+      .catch((error) => {
+        logger.warn(error, '注册命令 %s 的目录监听失败', name)
+      })
   }
 }
-
