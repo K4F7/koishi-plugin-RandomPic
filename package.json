@@ -1,0 +1,49 @@
+{
+  "name": "koishi-plugin-random-pic",
+  "version": "0.1.0",
+  "description": "A Koishi plugin that provides random picture responses.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rimraf lib && npm run build:types && npm run build:js",
+    "build:types": "tsc --emitDeclarationOnly",
+    "build:js": "esbuild src/index.ts --bundle --format=esm --platform=node --target=node18 --outfile=lib/index.js --external:koishi",
+    "lint": "eslint \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "koishi",
+    "plugin",
+    "random",
+    "picture"
+  ],
+  "author": "Sein",
+  "license": "MIT",
+  "peerDependencies": {
+    "koishi": "^4.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "@typescript-eslint/eslint-plugin": "^7.7.1",
+    "@typescript-eslint/parser": "^7.7.1",
+    "esbuild": "^0.20.2",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.4.5",
+    "vitest": "^1.5.0"
+  }
+}
