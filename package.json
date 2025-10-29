@@ -1,5 +1,5 @@
 {
-  "name": "koishi-plugin-random-pic",
+  "name": "@sein3826/koishi-plugin-randompic",
   "version": "0.1.0",
   "description": "A Koishi plugin that sends random images from configured galleries.",
   "main": "lib/index.js",
@@ -16,16 +16,34 @@
   "keywords": [
     "koishi",
     "plugin",
+    "koishi-plugin",
     "random",
     "image"
   ],
-  "author": "",
+  "author": "K4F7 <K4F7@users.noreply.github.com>",
   "license": "MIT",
+  "homepage": "https://github.com/K4F7/koishi-plugin-randompic#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/K4F7/koishi-plugin-randompic.git"
+  },
+  "bugs": {
+    "url": "https://github.com/K4F7/koishi-plugin-randompic/issues"
+  },
+  "koishi": {
+    "description": {
+      "en": "Randomly send images from local galleries.",
+      "zh": "从本地图库随机发送图片。"
+    }
+  },
   "peerDependencies": {
     "koishi": "^4.15.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
     "typescript": "^5.4.5"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

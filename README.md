@@ -1,4 +1,4 @@
-# koishi-plugin-randompic
+# @sein3826/koishi-plugin-randompic
 
 A Koishi plugin that sends truly random images from local galleries. The plugin bootstraps its working directories automatically so that users only need to drop images into folders.
 
@@ -8,6 +8,12 @@ A Koishi plugin that sends truly random images from local galleries. The plugin 
 - Allows mapping multiple Koishi commands to one or more gallery folders.
 - Supports per-command limits and optional recursive directory scanning.
 - Sends images via `session.send` or `session.sendQueued` depending on configuration.
+
+## Installation
+
+```bash
+npm install @sein3826/koishi-plugin-randompic
+```
 
 ## Usage
 
