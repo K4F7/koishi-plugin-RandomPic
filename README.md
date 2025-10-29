@@ -1,4 +1,4 @@
-# sein3826/koishi-plugin-randompic
+# koishi-plugin-randompic
 
 A Koishi plugin that sends truly random images from local galleries. The plugin bootstraps its working directories automatically so that users only need to drop images into folders.
 
